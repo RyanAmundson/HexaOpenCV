@@ -13,13 +13,13 @@ $(document).ready(function() {
                     console.log("received data from robot: ")
                     console.log(data)
                     if (data.length > 100) {
-                        //var img = $('<img id="dynamic" height="50px" width="50px" style="display:inline-block">'); //Equivalent: $(document.createElement('img'))
-                        //img.attr('src', 'data:image/jpeg;base64,' + data);
-                        var img = new Image();
+                        var img = $('<img id="dynamic" height="50px" width="50px" style="display:inline-block">'); //Equivalent: $(document.createElement('img'))
+                        img.attr('src', 'data:image/jpeg;base64,' + data);
+                        //var img = new Image();
                         img.src = 'data:image/jpeg;base64,' + data;
-                        ctx.drawImage(img, 0, 0);
-                        //img.appendTo($('#imagediv'));
-                        //document.getElementById('img').setAttribute('src', 'data:image/jpeg;base64,' + data);
+                        //ctx.drawImage(img, 0, 0);
+                        img.appendTo($('#imagediv'));
+                        document.getElementById('img').setAttribute('src', 'data:image/jpeg;base64,' + data);
                     } else {
                         //grab string and parse rect x,y,h,w
                         //draw on canvas

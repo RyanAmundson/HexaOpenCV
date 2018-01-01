@@ -11,22 +11,35 @@ import (
 	"mind/core/framework/log"
 	"mind/core/framework/skill"
 	"os"
+	"sync"
 
 	"github.com/lazywei/go-opencv/opencv"
 )
 
+type View struct {
+	id        int
+	image     *image.RGBA
+	direction float64
+	angle     float64
+}
+
 type FollowSkill struct {
 	skill.Base
-	state   FollowState
-	stop    chan bool
-	cascade *opencv.HaarCascade
+	state          FollowState
+	stop           chan bool
+	allViews       chan View
+	viewsWithFaces chan View
+	wg             sync.WaitGroup
+	cascade        *opencv.HaarCascade
 }
 
 func NewSkill() skill.Interface {
 	return &FollowSkill{
-		state:   FollowState{"idle"},
-		stop:    make(chan bool),
-		cascade: opencv.LoadHaarClassifierCascade("assets/haarcascade_frontalface_alt.xml"),
+		state:          FollowState{"idle"},
+		stop:           make(chan bool),
+		allViews:       make(chan View, 1000),
+		viewsWithFaces: make(chan View),
+		cascade:        opencv.LoadHaarClassifierCascade("assets/haarcascade_frontalface_alt.xml"),
 	}
 }
 
@@ -34,17 +47,11 @@ type FollowState struct {
 	state string
 }
 
-type View struct {
-	image     *image.RGBA
-	direction float64
-	angle     float64
-}
-
 /*
 EVENTS
 */
 
-func (d *FollowSkill) OnStart() {
+func (FS *FollowSkill) OnStart() {
 	log.Info.Println("Started")
 	hexabody.Start()
 	if !media.Available() {
@@ -56,28 +63,28 @@ func (d *FollowSkill) OnStart() {
 	}
 }
 
-func (d *FollowSkill) OnClose() {
+func (FS *FollowSkill) OnClose() {
 	hexabody.Close()
 }
 
-func (d *FollowSkill) OnDisconnect() {
+func (FS *FollowSkill) OnDisconnect() {
 	os.Exit(0) // Closes the process when remote disconnects
 }
 
-func (d *FollowSkill) OnRecvString(data string) {
+func (FS *FollowSkill) OnRecvString(data string) {
 	log.Info.Println(data)
 	switch data {
 	case "start":
-		go d.sight()
+		go FS.sight()
 		break
 	case "stop":
-		d.stop <- true
+		FS.stop <- true
 		break
 	case "pic":
 		go TakePic()
 		break
 	case "spinAround":
-		go d.Follow()
+		go FS.Follow()
 		break
 	}
 }
@@ -121,34 +128,59 @@ func SpinAround(c chan View) {
 		log.Info.Println(direction)
 		LookAt2(direction, pitch)
 		image := TakePic()
-		c <- View{image, direction, pitch}
+		c <- View{1, image, direction, pitch}
 		if direction >= 360 {
 			looking = false
 		}
 	}
 }
 
-func LookAround(c chan View) {
-	log.Info.Println("fn spinAround")
+/*
+LookAround
+State: working
+Description: turn head in 360 and take pictures which are pushed into the all views channel
+*/
+func (FS *FollowSkill) LookAround() {
+	//define
 	intervals := 12
+	currentInterval := 0
 	degreesPerInterval := float64(360 / intervals)
 	pitch := 10.0
-	TTC := 50
-	looking := true
-	hexabody.MoveHead(0, TTC)
-	log.Info.Println(hexabody.Direction())
-	for looking {
-		hexabody.MoveHead(degreesPerInterval, TTC)
-		log.Info.Println("turning head ")
-		direction := hexabody.Direction()
-		log.Info.Println(direction)
-		LookAt2(direction, pitch)
-		image := TakePic()
-		c <- View{image, direction, pitch}
-		if direction >= 360 {
-			looking = false
+	//init
+	hexabody.Stand()
+	direction := LookAt2(float64(currentInterval), pitch)
+	if direction == -1 {
+		log.Error.Println("look at failed")
+		return
+	}
+	for {
+		select {
+		case <-FS.stop:
+			log.Info.Println("stop received")
+			break
+		default:
+			direction = LookAt2(degreesPerInterval*float64(currentInterval), pitch)
+			if direction == -1 {
+				log.Error.Println("look at failed")
+				break
+			}
+			image := TakePicAndSend()
+			FS.allViews <- View{currentInterval, image, direction, pitch}
+			log.Info.Println("Current Interval: ", currentInterval)
+			currentInterval = currentInterval + 1
+			if currentInterval == intervals {
+				currentInterval = 0
+				direction = LookAt2(float64(currentInterval), pitch)
+				if direction == -1 {
+					log.Error.Println("look at failed")
+				}
+				FS.wg.Done()
+				return
+			}
 		}
 	}
+	logger("LookAround Complete")
+	return
 }
 
 func Idle() {
@@ -169,48 +201,106 @@ func LookAt(direction float64, angle float64) {
 	hexabody.Pitch(angle, 300)
 }
 
-func LookAt2(direction float64, angle float64) {
+func lookAtView(view View) {
+	log.Info.Println("fn lookAtView")
+	LookAt2(view.direction, view.angle)
+}
+
+func LookAt2(direction float64, angle float64) float64 {
 	log.Info.Println("look at called")
-	hexabody.MoveHead(direction, 10)
+	err := hexabody.MoveHead(direction, 50)
+	if err != nil {
+		log.Error.Println("Move head failed")
+		return -1
+	}
 	legs := hexabody.PitchRoll(direction, angle)
 	for i := 0; i < 6; i++ {
 		legs.SetLegPosition(i, legs[i])
 	}
+	return direction
 }
 
-func (d *FollowSkill) ContainsFace(view View) bool {
+func (FS *FollowSkill) ContainsFace(view View) bool {
 	log.Info.Println("checking for faces")
 	cvimg := opencv.FromImageUnsafe(view.image)
-	faces := d.cascade.DetectObjects(cvimg)
-
+	faces := FS.cascade.DetectObjects(cvimg)
+	log.Info.Println("face detection complete")
 	if len(faces) > 0 {
-		log.Info.Println("face(s) found")
+		log.Info.Println("face(s) found. ", "View: ", view.id)
 		log.Info.Println(len(faces))
 		return true
-	} else {
-		log.Info.Println("no faces found")
-		return false
 	}
+	log.Info.Println("no faces found. ", "View: ", view.id)
+	return false
 
 }
 
-func (d *FollowSkill) FindFaces(c1 chan View, c2 chan View) {
+func (FS *FollowSkill) FindFaces() {
 	log.Info.Println("fn findFaces")
 	for {
-		cV := <-c1
-		if d.ContainsFace(cV) {
-			log.Info.Println("face found")
-			SendImage(cV.image)
-			c2 <- cV
+		select {
+		case <-FS.stop:
+			break
+		case currentView := <-FS.allViews:
+			if FS.ContainsFace(currentView) {
+				log.Info.Println("!!!!!!!Face found!!!!!!")
+				log.Info.Println("View: ", currentView.id)
+				FS.viewsWithFaces <- currentView
+				return
+				//SendImage(currentView.image)
+			}
 		}
 
 	}
+	logger("FindFaces Complete")
+	return
 }
 
-func (d *FollowSkill) sight() {
+//Follow Skill is the entry point for this file
+func (FS *FollowSkill) Follow() {
+	if FS == nil {
+		log.Info.Println("no follow skill")
+	}
+	log.Info.Println("fn follow called")
+	StartingDirection := hexabody.Direction()
+	log.Info.Println("Starting Direction: ", StartingDirection)
+	FS.wg.Add(1)
+	go FS.LookAround()
+	FS.wg.Wait()
+	log.Info.Println("starting find faces")
+	go FS.FindFaces()
+	//FS.wg.Wait()
+
 	for {
 		select {
-		case <-d.stop:
+		case <-FS.stop:
+			logger("stop called")
+			break //
+		case viewWithFace := <-FS.viewsWithFaces:
+			FS.stop <- true
+			close(FS.allViews)
+			close(FS.viewsWithFaces)
+			log.Info.Println("looking at view: ", viewWithFace.id)
+			lookAtView(viewWithFace)
+			//hexabody.Walk(viewWithFace.direction, 5000)
+			//close channel if found? stop go routines to see if look at works
+		}
+	}
+	//search
+	//moveTowards
+	//maintainDistance
+}
+
+func logger(msg string) {
+	log.Info.Println("=================")
+	log.Info.Println(msg)
+	log.Info.Println("=================")
+}
+
+func (FS *FollowSkill) sight() {
+	for {
+		select {
+		case <-FS.stop:
 			return
 		default:
 			image := media.SnapshotRGBA()
@@ -219,33 +309,11 @@ func (d *FollowSkill) sight() {
 			str := base64.StdEncoding.EncodeToString(buf.Bytes())
 			framework.SendString(str)
 			cvimg := opencv.FromImageUnsafe(image)
-			faces := d.cascade.DetectObjects(cvimg)
+			faces := FS.cascade.DetectObjects(cvimg)
 			//facesStringv := base64.StdEncoding.EncodeToString(faces)
 			//framework.send(facesString)
 			hexabody.StandWithHeight(float64(len(faces)) * 50)
 			log.Info.Println(faces)
 		}
 	}
-}
-
-func (d *FollowSkill) Follow() {
-	log.Info.Println("fn follow called")
-	channel1 := make(chan View, 10)
-	channel2 := make(chan View, 10)
-	StartingDirection := hexabody.Direction()
-	log.Info.Println(StartingDirection)
-	go LookAround(channel1)
-	go d.FindFaces(channel1, channel2)
-
-	for {
-		cV := <-channel2
-		log.Info.Println("LookAt")
-		LookAt(StartingDirection, 0)
-		LookAt(cV.direction, cV.angle)
-		hexabody.Walk(cV.direction, 5000)
-		//close channel if found? stop go routines to see if look at works
-	}
-	//search
-	//moveTowards
-	//maintainDistance
 }
