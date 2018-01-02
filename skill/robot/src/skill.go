@@ -3,7 +3,6 @@ package examples
 import (
 	"bytes"
 	"encoding/base64"
-	"image"
 	"image/jpeg"
 	"math"
 	"mind/core/framework"
@@ -23,17 +22,9 @@ const ALL_VIEWS_BUFFER_SIZE = 1000
 const VIEW_EXPIRATION_IN_SECONDS = 300
 const SIZE_OF_INTERVAL_IN_DEGREES = 60.0
 const INTERVALS = 360 / SIZE_OF_INTERVAL_IN_DEGREES
-const TIME_TO_COMPLETE_MOVEMENT = 50
-const TIME_TO_SLEEP_AFTER_MOVEMENT_IN_MS = time.Millisecond * 100
+const TIME_TO_COMPLETE_MOVEMENT = 200
+const TIME_TO_SLEEP_AFTER_MOVEMENT_IN_MS = time.Millisecond * 200
 const GROUND_TO_FACE_PITCH_ANGLE = 20.0
-
-type View struct {
-	id        string
-	image     *image.RGBA
-	direction float64
-	angle     float64
-	timestamp time.Time
-}
 
 type FollowSkill struct {
 	skill.Base
@@ -61,9 +52,9 @@ type FollowState struct {
 	currState string
 }
 
-/*
+/*====================================================
 EVENTS
-*/
+=====================================================*/
 
 func (FS *FollowSkill) OnStart() {
 	log.Info.Println("Started")
@@ -103,50 +94,9 @@ func (FS *FollowSkill) OnRecvString(data string) {
 	}
 }
 
-/*
+/*====================================================
 End Events
-*/
-
-func SendImage(image *image.RGBA) {
-	buf := new(bytes.Buffer)
-	jpeg.Encode(buf, image, nil)
-	str := base64.StdEncoding.EncodeToString(buf.Bytes())
-	framework.SendString(str)
-}
-
-func TakePic() *image.RGBA {
-	log.Info.Println("taking photo")
-	image := media.SnapshotRGBA()
-	return image
-}
-
-func TakePicAndSend() *image.RGBA {
-	pic := TakePic()
-	SendImage(pic)
-	return pic
-}
-
-func SpinAround(c chan View) {
-	log.Info.Println("fn spinAround")
-	intervals := 12
-	degreesPerInterval := float64(360 / intervals)
-	TTC := 50
-	looking := true
-	hexabody.Spin(0, TTC)
-	log.Info.Println(hexabody.Direction())
-	for looking {
-		hexabody.Spin(degreesPerInterval, TTC)
-		log.Info.Println("turning head ")
-		direction := hexabody.Direction()
-		log.Info.Println(direction)
-		LookAt2(direction, GROUND_TO_FACE_PITCH_ANGLE)
-		image := TakePic()
-		c <- View{"SpinAround-" + strconv.FormatFloat(direction, 'E', -1, 64), image, direction, GROUND_TO_FACE_PITCH_ANGLE, time.Now()}
-		if direction >= 360 {
-			looking = false
-		}
-	}
-}
+====================================================*/
 
 /*
 LookAround
@@ -154,12 +104,9 @@ State: working
 Description: turn head in 360 and take pictures which are pushed into the all views channel
 */
 func (FS *FollowSkill) LookAround() {
-	//define
 	currentInterval := 0
 
-	//init
-	hexabody.Stand()
-	direction := LookAt2(0.0, GROUND_TO_FACE_PITCH_ANGLE)
+	direction := LookAt2(0.0, GROUND_TO_FACE_PITCH_ANGLE) // start from same spot everytime
 	if direction == -1 {
 		log.Error.Println("look at failed")
 		return
@@ -170,9 +117,8 @@ func (FS *FollowSkill) LookAround() {
 			log.Info.Println("stop received")
 			break
 		default:
-			log.Info.Println("calculated direction: ", direction, " API direction: ", hexabody.Direction())
-			image := TakePicAndSend()
-			FS.allViews <- View{"LookAround-" + strconv.Itoa(int(direction)), image, direction, GROUND_TO_FACE_PITCH_ANGLE, time.Now()}
+			FS.allViews <- NewView("LookAround-"+strconv.Itoa(int(direction)), direction, GROUND_TO_FACE_PITCH_ANGLE)
+			// FS.allViews <- View{"LookAround-" + strconv.Itoa(int(direction)), image, direction, GROUND_TO_FACE_PITCH_ANGLE, time.Now()}
 
 			if math.Mod(float64(currentInterval), float64(INTERVALS)) == (INTERVALS - 1) {
 				return
@@ -193,19 +139,9 @@ func (FS *FollowSkill) LookAround() {
 //interval is number of 30 degree rotations from given view
 func look(view View, interval int32) View {
 	direction := LookAt2(view.direction+float64(SIZE_OF_INTERVAL_IN_DEGREES*interval), GROUND_TO_FACE_PITCH_ANGLE)
-	image := TakePic()
-	return View{"Look-" + strconv.Itoa(int(direction)), image, direction, GROUND_TO_FACE_PITCH_ANGLE, time.Now()}
+	return NewView("Look-"+strconv.Itoa(int(direction)), direction, GROUND_TO_FACE_PITCH_ANGLE)
+
 	//FS.allViews <- View{0,image,newDirection,10}
-}
-
-func Idle() {
-	hexabody.StopPitch()
-	hexabody.MoveHead(0, 300)
-}
-
-func Reset() {
-	hexabody.StopPitch()
-	hexabody.MoveHead(0, 300)
 }
 
 func LookAt(direction float64, angle float64) {
@@ -225,20 +161,14 @@ func lookAtView(view View) View {
 
 func LookAt2(direction float64, angle float64) float64 {
 	//log.Info.Println("look at called")
+	//maybe run movements in parallel? closure is needed
 	err := hexabody.MoveHead(direction, TIME_TO_COMPLETE_MOVEMENT)
-
 	if err != nil {
 		log.Error.Println("Move head failed")
 		return -1
 	}
-	log.Info.Println("angle ", angle)
-	hexabody.Stand()
-	hexabody.Pitch(float64(GROUND_TO_FACE_PITCH_ANGLE), 500)
-	// legs := hexabody.PitchRoll(GROUND_TO_FACE_PITCH_ANGLE, 20.0)
-	// for i := 0; i < 6; i++ {
-	// 	legs.SetLegPosition(i, legs[i])
-	// }
-	// time.Sleep(TIME_TO_SLEEP_AFTER_MOVEMENT_IN_MS)
+	hexabody.Pitch(float64(GROUND_TO_FACE_PITCH_ANGLE), TIME_TO_COMPLETE_MOVEMENT)
+	time.Sleep(TIME_TO_SLEEP_AFTER_MOVEMENT_IN_MS) //first picture blurry, others seem good.
 	return direction
 }
 
@@ -275,7 +205,7 @@ func ContainsFaceAsync(view View, vFW chan<- View) {
 
 	faces = opencv.LoadHaarClassifierCascade("assets/haarcascade_frontalface_alt.xml").DetectObjects(cvimg) //maybe cant be in go routine?
 	if len(faces) > 0 {
-		log.Info.Println("******Face found at ", "view: ", view.id+"-", view.direction)
+		log.Info.Println("******Face found at ", "view: ", view.name+"-", view.direction)
 		SendImage(view.image)
 		vFW <- view
 		//FS.state.currState = "following"
@@ -314,10 +244,13 @@ func (FS *FollowSkill) CheckPeripherals(view View) {
 	log.Info.Println("Adjusting direction")
 	if FS.ContainsFace(look(view, 1)) == true {
 		log.Info.Println("success on look left")
+		FS.viewsWithFaces <- look(view, 1)
 	} else if FS.ContainsFace(look(view, -1)) == true {
 		log.Info.Println("success on look right")
+		FS.viewsWithFaces <- look(view, -1)
 	} else {
 		log.Info.Println("could not relocate face")
+		go FS.FindFaces()
 	}
 }
 
@@ -332,9 +265,11 @@ func (FS *FollowSkill) ConfirmFaceFound() {
 			look(viewWithFace, 0)
 			log.Info.Println("calculated direction: ", viewWithFace.direction, " API direction: ", hexabody.Direction())
 			image := TakePicAndSend()
-			lastView := View{"ConfirmFaceFound-" + strconv.Itoa(int(viewWithFace.direction)), image, viewWithFace.direction, viewWithFace.angle, time.Now()}
+			lastView := View{viewWithFace.id, "ConfirmFaceFound-" + strconv.Itoa(int(viewWithFace.direction)), image, viewWithFace.direction, viewWithFace.angle, time.Now()}
 			if FS.ContainsFace(lastView) {
 				log.Info.Println("Success!")
+				hexabody.StopPitch()
+				hexabody.Walk(lastView.direction, 3000)
 			} else {
 				FS.CheckPeripherals(lastView)
 			}
@@ -360,43 +295,6 @@ func (FS *FollowSkill) FollowAsync() {
 	//moveTowards
 	//maintainDistance
 }
-func (FS *FollowSkill) FollowSync() {
-	if FS == nil {
-		log.Info.Println("no follow skill")
-	}
-	//log.Info.Println("fn follow called")
-	StartingDirection := hexabody.Direction()
-	log.Info.Println("Starting Direction: ", StartingDirection)
-	//FS.wg.Add(1)
-	FS.LookAround()
-	//FS.wg.Wait()
-	log.Info.Println("starting find faces")
-	//FS.wg.Add(1)
-	FS.FindFaces()
-	//FS.wg.Wait()
-	log.Info.Println("here")
-
-	log.Info.Println("starting look look at found face")
-	for {
-		select {
-		case <-FS.stop:
-			logger("stop called")
-			return
-			break
-		case viewWithFace := <-FS.viewsWithFaces:
-			//FS.stop <- true
-			//close(FS.allViews)
-			//close(FS.viewsWithFaces)
-			log.Info.Println("looking at view: ", viewWithFace.id)
-			lookAtView(viewWithFace)
-			//hexabody.Walk(viewWithFace.direction, 5000)
-			//close channel if found? stop go routines to see if look at works
-		}
-	}
-	//search
-	//moveTowards
-	//maintainDistance
-}
 
 func PitchTest() {
 	log.Info.Println("PitchTest")
@@ -407,6 +305,7 @@ func PitchTest() {
 	// 	legs.SetLegPosition(i, legs[i])
 	// }
 }
+
 func logger(msg string) {
 	log.Info.Println("=================")
 	log.Info.Println(msg)
