@@ -59,3 +59,36 @@ package examples
 // 	//moveTowards
 // 	//maintainDistance
 // }
+
+// func NewView(name string) View {
+
+// 	return View{
+// 		id:        time.Now().Unix(),
+// 		name:      name,
+// 		image:     TakePicAndSend(),
+// 		direction: hexabody.Direction,
+// 		angle:     angle,
+// 		timestamp: time.Now(),
+// 	}
+
+// }
+
+// func NewViewWithImage(name string, image *image.RGBA, direction float64, angle float64) View {
+// 	return View{
+// 		id:        time.Now().Unix(),
+// 		name:      name,
+// 		image:     image,
+// 		direction: direction,
+// 		angle:     angle,
+// 		timestamp: time.Now(),
+// 	}
+
+// }
+
+// func LookAt(direction float64, angle float64) {
+// 	log.Info.Println("look at called")
+// 	log.Info.Println(direction)
+// 	hexabody.Spin(0, 300)
+// 	hexabody.Spin(direction, 300)
+// 	hexabody.Pitch(angle, 300)
+// }

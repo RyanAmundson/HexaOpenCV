@@ -26,6 +26,12 @@ $(document).ready(function() {
                     }
                 })
             });
+            document.getElementById("test").onclick = function() {
+                robot.sendData({
+                    skillID: skillID,
+                    data: "test"
+                })
+            }
             document.getElementById("start").onclick = function() {
                 robot.sendData({
                     skillID: skillID,

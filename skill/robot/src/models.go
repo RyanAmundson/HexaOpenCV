@@ -15,19 +15,7 @@ type View struct {
 	timestamp time.Time
 }
 
-func NewView(name string, direction float64, angle float64) View {
-	return View{
-		id:        time.Now().Unix(),
-		name:      name,
-		image:     TakePicAndSend(),
-		direction: direction,
-		angle:     angle,
-		timestamp: time.Now(),
-	}
-
-}
-
-func NewViewWithImage(name string, image *image.RGBA, direction float64, angle float64) View {
+func NewView(name string, image *image.RGBA, direction float64, angle float64, timestamp time.Time) View {
 	return View{
 		id:        time.Now().Unix(),
 		name:      name,
@@ -39,14 +27,10 @@ func NewViewWithImage(name string, image *image.RGBA, direction float64, angle f
 
 }
 
-// func (view View) UpdateView(){
+//func (view View) UpdateImage(){
 
-// }
+//}
 
 // func (view View) LookAt(){
-
-// }
-
-// func (view View) ContainsFace(){
 
 // }
